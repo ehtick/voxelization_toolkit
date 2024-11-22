@@ -5,7 +5,12 @@
 #ifdef IFCOPENSHELL_05
 #include <ifcgeom/IfcGeomIterator.h>
 #else
+#ifdef IFCOPENSHELL_08
+#include <ifcgeom/Iterator.h>
+#include <ifcgeom/kernels/opencascade/OpenCascadeConversionResult.h>
+#else
 #include <ifcgeom_schema_agnostic/IfcGeomIterator.h>
+#endif
 #endif
 
 #include <ifcparse/IfcFile.h>
@@ -293,15 +298,22 @@ public:
 					std::vector<IfcUtil::IfcBaseClass*> projects_copy(projects->begin(), projects->end());
 					if (projects->size() > 1) {
 						for (auto it = projects_copy.begin() + 1; it != projects_copy.end(); ++it) {
+#ifdef IFCOPENSHELL_08
+							auto inverses = f->getInverse((*it)->id(), nullptr, -1);
+#else
 							auto inverses = f->getInverse((*it)->data().id(), nullptr, -1);
-
+#endif
 							f->removeEntity(*it);
 
 							for (auto& inv : *inverses) {
 								if (inv->declaration().name() == "IFCRELAGGREGATES") {
+#ifdef IFCOPENSHELL_08
+									inv->set_attribute_value(4, projects_copy[0]);
+#else
 									auto attr = new IfcWrite::IfcWriteArgument;
 									attr->set(projects_copy[0]);
 									inv->data().setArgument(4, attr);
+#endif
 								}
 							}
 						}
@@ -324,7 +336,7 @@ public:
 };
 
 #ifdef WITH_IFC
-#ifdef IFCOPENSHELL_07
+#if defined(IFCOPENSHELL_07) || defined(IFCOPENSHELL_08)
 typedef IfcGeom::Iterator iterator_t;
 typedef aggregate_of_instance instance_list_t;
 #else
@@ -376,6 +388,11 @@ public:
 
 		const filtered_files_t& ifc_files = scope.get_value<filtered_files_t>("input");
 
+#ifdef IFCOPENSHELL_08
+		ifcopenshell::geometry::Settings settings_surface;
+		settings_surface.get<ifcopenshell::geometry::settings::UseElementHierarchy>().value = true;
+		settings_surface.get<ifcopenshell::geometry::settings::IteratorOutput>().value = ifcopenshell::geometry::settings::NATIVE;
+#else
 		IfcGeom::IteratorSettings settings_surface;
 		settings_surface.set(IfcGeom::IteratorSettings::DISABLE_TRIANGULATION, true);
 		// settings_surface.set(IfcGeom::IteratorSettings::USE_WORLD_COORDS, true);
@@ -384,6 +401,7 @@ public:
 		settings_surface.set(IfcGeom::IteratorSettings::ELEMENT_HIERARCHY, true);
 #else
 		settings_surface.set(IfcGeom::IteratorSettings::SEARCH_FLOOR, true);
+#endif
 #endif
 		
 		boost::optional<bool> include, roof_slabs;
@@ -455,11 +473,15 @@ public:
 #ifdef IFCOPENSHELL_05
 			iterator.reset(iterator_t(settings_surface, ifc_file, filters_surface));
 #else
+#ifdef IFCOPENSHELL_08
+			iterator.reset(new iterator_t("opencascade", settings_surface, ifc_file, filters_surface, threads.get_value_or(1)));
+#else
 			if (threads) {
 				iterator.reset(new iterator_t(settings_surface, ifc_file, filters_surface, *threads));
 			} else {
 				iterator.reset(new iterator_t(settings_surface, ifc_file, filters_surface));
 			}
+#endif
 #endif
 			
 			
@@ -503,7 +525,11 @@ public:
 				}
 				if (roof_slabs && elem_product->declaration().is("IfcSlab")) {
 					auto attr_value = elem_product->get("PredefinedType");
+#ifdef IFCOPENSHELL_08
+					std::string pdt = attr_value.type() == IfcUtil::Argument_STRING ? (std::string)attr_value : std::string("");
+#else
 					std::string pdt = attr_value->isNull() ? std::string("") : (std::string)(*attr_value);
+#endif
 					process = process && (pdt == "ROOF") == *roof_slabs;
 				}
 #endif
@@ -515,14 +541,25 @@ public:
 #ifdef IFCOPENSHELL_05
 						throw std::runtime_error("Error evaluating filter on " + elem_product->toString());
 #else
+#ifdef IFCOPENSHELL_08
+						std::ostringstream oss;
+						elem_product->toString(oss);
+						throw std::runtime_error("Error evaluating filter on " + oss.str());
+#else
 						throw std::runtime_error("Error evaluating filter on " + elem_product->data().toString());
+#endif
 #endif
 					}
 				}
 
 				if (process) {
+#ifdef IFCOPENSHELL_08
+					auto comp = elem->geometry().as_compound();
+					TopoDS_Compound compound = TopoDS::Compound(((ifcopenshell::geometry::OpenCascadeShape*)comp)->shape());
+					delete comp;
+#else
 					TopoDS_Compound compound = elem->geometry().as_compound();
-					
+#endif				
 					bool filtered_non_empty = true;
 					if (only_transparent || only_opaque) {
 						filtered_non_empty = false;
@@ -532,7 +569,7 @@ public:
 
 						auto it = elem->geometry().begin();
 						for (TopoDS_Iterator jt(compound); jt.More(); ++it, jt.Next()) {
-							bool is_transparent = it->hasStyle() && it->Style().Transparency().get_value_or(0.0) > 1.e-9;
+							bool is_transparent = it->hasStyle() && it->Style().has_transparency() && it->Style().transparency > 1.e-9;
 							if (only_transparent == is_transparent) {
 								B.Add(filtered, jt.Value());
 								filtered_non_empty = true;
@@ -543,8 +580,18 @@ public:
 					}
 
 					if (filtered_non_empty) {
+#ifdef IFCOPENSHELL_08
+						const auto& m = elem->transformation().data()->ccomponents();
+						gp_Trsf tr;
+						tr.SetValues(
+							m(0, 0), m(0, 1), m(0, 2), m(0, 3),
+							m(1, 0), m(1, 1), m(1, 2), m(1, 3),
+							m(2, 0), m(2, 1), m(2, 2), m(2, 3)
+						);
+						compound.Move(tr);
+#else
 						compound.Move(elem->transformation().data());
-
+#endif
 						BRepMesh_IncrementalMesh(compound, 0.001);
 						geometries->push_back(std::make_pair(std::pair<void*, int>(ifc_file, elem->id()), compound));
 					}
@@ -569,7 +616,10 @@ public:
 			abort();
 		}
 
-		std::random_shuffle(geometries->begin(), geometries->end());
+		std::random_device rd;
+		std::mt19937 g(rd());
+
+		std::shuffle(geometries->begin(), geometries->end(), g);
 
 		return geometries;
 	}
@@ -1251,7 +1301,11 @@ class op_export_elements : public voxel_operation {
 				}
 			}
 			if (include) {
+#ifdef IFCOPENSHELL_08
+				std::string guid = (std::string)((IfcUtil::IfcBaseEntity*)((IfcParse::IfcFile*)iden.first)->instance_by_id(iden.second))->get("GlobalId");
+#else
 				std::string guid = *((IfcUtil::IfcBaseEntity*)((IfcParse::IfcFile*)iden.first)->instance_by_id(iden.second))->get("GlobalId");
+#endif
 				if (n++) {
 					json << ",\n";
 				}
@@ -2040,17 +2094,30 @@ namespace {
 				if (idx == -1) {
 					throw std::runtime_error(inst->declaration().name() + " has no attribute " + p.first);
 				}
+#ifdef IFCOPENSHELL_08
+				auto attr = inst->as<IfcUtil::IfcBaseEntity>()->data().get_attribute_value(idx);
+				if (attr.isNull()) {
+#else
 				auto attr = inst->data().getArgument(idx);
 				if (!attr || attr->isNull()) {
+#endif
 					return false;
 				}
-				if (attr->type() == IfcUtil::Argument_DOUBLE) {
+				if (attr.type() == IfcUtil::Argument_DOUBLE) {
 					auto op = p.second.at(0);
 					auto v = p.second.substr(1);
-					auto attr_type = inst->declaration().attribute_by_index(idx);
+					auto attr_type = inst->declaration().as_entity()->attribute_by_index(idx);
+#ifdef IFCOPENSHELL_08
+					double d0 = attr;
+#else
 					double d0 = *attr;
+#endif
 					if (attr_type->type_of_attribute()->is("IfcLengthMeasure")) {
+#ifdef IFCOPENSHELL_08
+						d0 *= inst->file_->getUnit("LENGTHUNIT").second;
+#else
 						d0 *= inst->data().file->getUnit("LENGTHUNIT").second;
+#endif
 					}
 					auto d1 = boost::lexical_cast<double>(v);
 					if (op == '<') {
@@ -2099,13 +2166,21 @@ namespace {
 				if (rels) {
 					for (auto& rel : *rels) {
 						if (rel->declaration().is("IfcRelDefinesByProperties")) {
+#ifdef IFCOPENSHELL_08
+							IfcUtil::IfcBaseClass* pset = ((IfcUtil::IfcBaseEntity*)rel)->get("RelatingPropertyDefinition");
+							if (pset->declaration().is("IfcPropertySet")) {
+								instance_list_t::ptr props = ((IfcUtil::IfcBaseEntity*)pset)->get("HasProperties");
+								for (auto& prop : *props) {
+									if (prop->declaration().is("IfcPropertySingleValue")) {
+										auto name = (std::string) ((IfcUtil::IfcBaseEntity*)prop)->get("Name");
+#else
 							IfcUtil::IfcBaseClass* pset = *((IfcUtil::IfcBaseEntity*)rel)->get("RelatingPropertyDefinition");
 							if (pset->declaration().is("IfcPropertySet")) {
 								instance_list_t::ptr props = *((IfcUtil::IfcBaseEntity*)pset)->get("HasProperties");
 								for (auto& prop : *props) {
 									if (prop->declaration().is("IfcPropertySingleValue")) {
 										auto name = (std::string) *((IfcUtil::IfcBaseEntity*)prop)->get("Name");
-										
+#endif
 										/*
 										// In the voxelfile grammer we can also have keywords starting with an alpha character
 										// so for the string comparison we need to trim off any others.
@@ -2120,10 +2195,17 @@ namespace {
 
 										if (name == p.first) {
 											has_match = true;
+#ifdef IFCOPENSHELL_08
+											IfcUtil::IfcBaseClass* val = ((IfcUtil::IfcBaseEntity*)prop)->get("NominalValue");
+											auto val_attr = val->data().get_attribute_value(0);
+											if (val_attr.type() == IfcUtil::Argument_BOOL) {
+												auto v_ifc = (bool)val_attr;
+#else
 											IfcUtil::IfcBaseClass* val = *((IfcUtil::IfcBaseEntity*)prop)->get("NominalValue");
 											auto val_attr = val->data().getArgument(0);
 											if (val_attr->type() == IfcUtil::Argument_BOOL) {
 												auto v_ifc = (bool)*val_attr;
+#endif
 												int v_filter = 0;
 												try {
 													v_filter = boost::get<int>(p.second);
@@ -2134,8 +2216,13 @@ namespace {
 												if (!match) {
 													return false;
 												}
+#ifdef IFCOPENSHELL_08
+											} else if (val_attr.type() == IfcUtil::Argument_STRING) {
+												auto v_ifc = (std::string)val_attr;
+#else
 											} else if (val_attr->type() == IfcUtil::Argument_STRING) {
 												auto v_ifc = (std::string)*val_attr;
+#endif
 												std::string v_filter;
 												try {
 													v_filter = boost::get<std::string>(p.second);

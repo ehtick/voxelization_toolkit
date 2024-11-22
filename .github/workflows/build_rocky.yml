@@ -1,0 +1,117 @@
+name: Build Voxelization Toolkit Linux
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build_voxec:
+    runs-on: ubuntu-20.04
+    container: rockylinux:8
+
+    steps:
+      - name: Install Dependencies
+        run: |
+          yum update -y
+          yum install -y gcc gcc-c++ git autoconf automake bison make zip cmake python3  \
+                         bzip2 patch mesa-libGL-devel libffi-devel fontconfig-devel      \
+                         sqlite-devel bzip2-devel zlib-devel openssl-devel xz-devel      \
+                         readline-devel ncurses-devel libffi-devel libuuid-devel git-lfs \
+                         findutils swig
+          python3 -m pip install --upgrade pip
+          ln -s /usr/bin/python3 /usr/bin/python
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Checkout IfcOpenShell
+        uses: actions/checkout@v3
+        with:
+          repository: IfcOpenShell/IfcOpenShell
+          path: IfcOpenShell
+          token: ${{ secrets.BUILD_REPO_TOKEN }}
+          submodules: recursive
+
+      - name: Checkout Build Repository
+        uses: actions/checkout@v3
+        with:
+          repository: IfcOpenShell/build-outputs
+          path: IfcOpenShell/build
+          ref: rockylinux8-x64
+          lfs: true
+          token: ${{ secrets.BUILD_REPO_TOKEN }}
+
+      - name: Unpack IfcOpenShell Dependencies
+        run: |
+          install_root=$(find ./IfcOpenShell/build -maxdepth 4 -name install)
+          find "$install_root" -type f -name 'cache-*.tar.gz' -maxdepth 1 -exec tar -xzf {} -C "$install_root" \;
+
+      # Not supported on docker
+      # - name: ccache
+      #   uses: hendrikmuhs/ccache-action@v1
+      #   with:
+      #     key: ${GITHUB_WORKFLOW}-rockylinux8-x64
+
+      - name: Run IfcOpenShell Build Script
+        run: |
+          CXXFLAGS="-O3" CFLAGS="-O3 ${DARWIN_C_SOURCE}" ADD_COMMIT_SHA=1 BUILD_CFG=Release python3 ./IfcOpenShell/nix/build-all.py --diskcleanup IfcConvert python
+
+      - name: Compile voxec
+        run: |
+          base=$GITHUB_WORKSPACE/IfcOpenShell/build/Linux/x86_64/install
+          mkdir build
+          cd build
+          for python_root in $base/python-*; do
+            [ -f CMakeCache.txt ] && rm CMakeCache.txt
+            cmake .. \
+              "-DCMAKE_BUILD_TYPE=Release" \
+              "-DENABLE_PYTHON_WRAPPER=On" \
+              "-DENABLE_TESTS=Off" \
+              "-DUSE_BUILD_SCRIPT_OUTPUT=Off" \
+              "-DBoost_USE_STATIC_LIBS=On" \
+              "-DBoost_NO_BOOST_CMAKE=On" \
+              "-DCMAKE_INSTALL_PREFIX=../install" \
+              "-DIFC_INCLUDE_DIR=$base/ifcopenshell/include" \
+              "-DIFC_LIBRARY_DIR=$base/ifcopenshell/lib64" \
+              "-DOCC_INCLUDE_DIR=$base/occt-7.8.1/include/opencascade" \
+              "-DOCC_LIBRARY_DIR=$base/occt-7.8.1/lib" \
+              "-DPython_EXECUTABLE=$python_root/bin/python3" \
+              "-DBOOST_ROOT=$base/boost-1.86.0" \
+              "-DGMP_LIBRARY_DIR=$base/gmp-6.2.1/lib" \
+              "-DMPFR_LIBRARY_DIR=$base/mpfr-3.1.6/lib"
+            make -j4 install
+          done
+
+      - name: Package .zip archives
+        run: |
+          base=$GITHUB_WORKSPACE/IfcOpenShell/build/Linux/x86_64/install
+          mkdir -p $GITHUB_WORKSPACE/package
+          cd $GITHUB_WORKSPACE/package
+          cp $GITHUB_WORKSPACE/pyproject.toml .
+
+          for python_root in $base/python-*; do
+            PATH=$python_root/bin:$PATH python3 -m pip install --upgrade pip setuptools wheel
+            PATH=$python_root/bin:$PATH python3 -m pip install build auditwheel patchelf
+`
+            mm=`$python_root/bin/python3 --version | cut -c8- | cut -d. -f 1,2 | tr -d '.'`
+            mdm=`$python_root/bin/python3 --version | cut -c8- | cut -d. -f 1,2`
+            cp -R $python_root/lib/python$mdm/site-packages/voxec .
+            echo '[bdist_wheel]' > setup.cfg
+            echo 'python-tag = cp$mm' >> setup.cfg
+
+            PATH=$python_root/bin:$PATH python3 -m build -w
+            PATH=$python_root/bin:$PATH python3 -m auditwheel repair --plat manylinux_2_28_x86_64 dist/*.whl -w audited
+
+            rm -r voxec dist/*.whl
+          done
+
+      - name: Publish a Python distribution to PyPI
+        uses: ortega2247/pypi-upload-action@master
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages_dir: package/audited

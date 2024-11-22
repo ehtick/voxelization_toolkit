@@ -1,0 +1,150 @@
+name: Build Voxelization Toolkit OSX
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build_voxec:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: macos-13
+            arch: x64
+            oldarch:
+            cpuarch: x86_64
+            macosx_ver: '10_15'
+          - os: macos
+            runner: macos-14
+            arch: arm64
+            oldarch: m1
+            cpuarch: arm64
+            macosx_ver: '11_0'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Checkout IfcOpenShell
+        uses: actions/checkout@v3
+        with:
+          repository: IfcOpenShell/IfcOpenShell
+          path: IfcOpenShell
+          token: ${{ secrets.BUILD_REPO_TOKEN }}
+          submodules: recursive
+
+      - name: Checkout Build Repository
+        uses: actions/checkout@v3
+        with:
+          repository: IfcOpenShell/build-outputs
+          path: IfcOpenShell/build
+          ref: ${{ matrix.os }}-${{ matrix.arch }}
+          lfs: true
+          token: ${{ secrets.BUILD_REPO_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+        
+      - name: Install Dependencies
+        run: |
+          brew update
+          brew install git bison autoconf automake libffi cmake findutils swig
+          echo "$(brew --prefix findutils)/libexec/gnubin" >> $GITHUB_PATH
+        
+      - name: Unpack IfcOpenShell Dependencies
+        run: |
+          install_root=$(find ./IfcOpenShell/build -maxdepth 4 -name install)
+          find "$install_root" -type f -name 'cache-*.tar.gz' -maxdepth 1 -exec tar -xzf {} -C "$install_root" \;
+
+      - name: Relocate python libraries
+        run: |
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
+          for pybin in $(find $base -name python3); do
+            l="$(ls $(dirname $pybin)/../lib/libpython*.dylib 2>/dev/null | head -n 1)"
+            o="$(otool -L "$pybin" | awk '/libpython/ {print $1; exit}')"
+            n="@executable_path/../lib/$(basename "$l")"
+            install_name_tool -change "$o" "$n" "$pybin"
+            otool -L "$pybin"
+          done
+
+      - name: Debug
+        run: |
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
+          $base/python-3.9.11/bin/python3 --version
+          $base/python-3.9.11/bin/python3 -c 'import sysconfig; print(sysconfig.get_path("platlib"))'
+
+      - name: Run IfcOpenShell Build Script
+        run: |
+          if [ "${{ matrix.os }}" == "macos" ]; then
+            DARWIN_C_SOURCE=-D_DARWIN_C_SOURCE
+          fi
+          CXXFLAGS="-O3" CFLAGS="-O3 ${DARWIN_C_SOURCE}" ADD_COMMIT_SHA=1 BUILD_CFG=Release python3 ./IfcOpenShell/nix/build-all.py --diskcleanup IfcConvert python
+
+      - name: Compile voxec
+        run: |
+          export CFLAGS="-Wl,-flat_namespace,-undefined,suppress"
+          export CXXFLAGS="-Wl,-flat_namespace,-undefined,suppress"
+          export LDFLAGS="-Wl,-flat_namespace,-undefined,suppress"
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
+          mkdir build
+          cd build
+          for python_root in $base/python-*; do
+            [ -f CMakeCache.txt ] && rm CMakeCache.txt
+            cmake .. \
+              "-DCMAKE_BUILD_TYPE=Release" \
+              "-DENABLE_PYTHON_WRAPPER=On" \
+              "-DENABLE_TESTS=Off" \
+              "-DUSE_BUILD_SCRIPT_OUTPUT=Off" \
+              "-DBoost_USE_STATIC_LIBS=On" \
+              "-DBoost_NO_BOOST_CMAKE=On" \
+              "-DCMAKE_INSTALL_PREFIX=../install" \
+              "-DIFC_INCLUDE_DIR=$base/ifcopenshell/include" \
+              "-DIFC_LIBRARY_DIR=$base/ifcopenshell/lib" \
+              "-DOCC_INCLUDE_DIR=$base/occt-7.8.1/include/opencascade" \
+              "-DOCC_LIBRARY_DIR=$base/occt-7.8.1/lib" \
+              "-DPython_EXECUTABLE=$python_root/bin/python3" \
+              "-DBOOST_ROOT=$base/boost-1.86.0" \
+              "-DGMP_LIBRARY_DIR=$base/gmp-6.2.1/lib" \
+              "-DMPFR_LIBRARY_DIR=$base/mpfr-3.1.6/lib"
+            make -j4 install
+          done
+
+      - name: Package .zip archives
+        run: |
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
+          mkdir -p $GITHUB_WORKSPACE/package
+          cd $GITHUB_WORKSPACE/package
+          cp $GITHUB_WORKSPACE/pyproject.toml .
+
+          for python_root in $base/python-*; do
+            PATH=$python_root/bin:$PATH python3 -m pip install --upgrade pip setuptools wheel
+            PATH=$python_root/bin:$PATH python3 -m pip install build delocate
+
+            mm=`$python_root/bin/python3 --version | cut -c8- | cut -d. -f 1,2 | tr -d '.'`
+            mdm=`$python_root/bin/python3 --version | cut -c8- | cut -d. -f 1,2`
+            cp -R $python_root/lib/python$mdm/site-packages/voxec .
+            echo '[bdist_wheel]' > setup.cfg
+            echo 'python-tag = cp'$mm >> setup.cfg
+
+            PATH=$python_root/bin:$PATH python3 -m build -w
+            PATH=$python_root/bin:$PATH delocate-wheel dist/*.whl -w audited
+            mv audited/voxec-0.4.0-cp$mm-none-any.whl audited/voxec-0.4.0-cp$mm-none-macosx_${{ matrix.macosx_ver }}_${{ matrix.cpuarch }}.whl
+
+            rm -r voxec dist/*.whl
+          done
+
+      - name: Publish a Python distribution to PyPI
+        uses: ortega2247/pypi-upload-action@master
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages_dir: package/audited
