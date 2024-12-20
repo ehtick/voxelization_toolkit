@@ -63,6 +63,17 @@ jobs:
           install_root=$(find ./IfcOpenShell/build -maxdepth 4 -name install)
           find "$install_root" -type f -name 'cache-*.tar.gz' -maxdepth 1 -exec tar -xzf {} -C "$install_root" \;
 
+      - name: Relocate python libraries
+        run: |
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
+          for pybin in $(find $base -name python3); do
+            l="$(ls $(dirname $pybin)/../lib/libpython*.dylib 2>/dev/null | head -n 1)"
+            o="$(otool -L "$pybin" | awk '/libpython/ {print $1; exit}')"
+            n="@executable_path/../lib/$(basename "$l")"
+            install_name_tool -change "$o" "$n" "$pybin"
+            otool -L "$pybin"
+          done
+
       - name: Debug
         run: |
           base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
