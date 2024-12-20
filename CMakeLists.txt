@@ -10,8 +10,6 @@ OPTION(ENABLE_TESTS "Enable tests." ON)
 OPTION(USE_BUILD_SCRIPT_OUTPUT "Use the ifcopenshell nix/build-all.py or win/build-all.cmd build script output to find dependencies." ON)
 OPTION(ENABLE_PYTHON_WRAPPER "Enable Python wrapper." OFF)
 
-cmake_policy(SET CMP0148 OLD)
-
 include(CTest)
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -318,17 +316,14 @@ if (ENABLE_PYTHON_WRAPPER)
 		MESSAGE(FATAL_ERROR "ENABLE_PYTHON_WRAPPER enabled, but unable to find SWIG. Disable ENABLE_PYTHON_WRAPPER or fix SWIG paths to proceed.")
 	ENDIF()
 	INCLUDE(${SWIG_USE_FILE})
-	find_package(PythonLibs)
-	IF(NOT PYTHONLIBS_FOUND OR "$PYTHON_INCLUDE_DIRS}" STREQUAL "")
+	find_package(Python COMPONENTS Interpreter Development)
+	IF(NOT Python_FOUND)
 		MESSAGE(FATAL_ERROR "ENABLE_PYTHON_WRAPPER enabled, but unable to find Python lib or header. Disable ENABLE_PYTHON_WRAPPER or fix Python paths to proceed.")
 	ENDIF()
-	find_package(PythonInterp)
-	IF(NOT PYTHONINTERP_FOUND OR "${PYTHON_EXECUTABLE}" STREQUAL "")
-    		MESSAGE(FATAL_ERROR "ENABLE_PYTHON_WRAPPER enabled, but unable to find Python interpreter. Disable ENABLE_PYTHON_WRAPPER or fix Python paths to proceed.")
-	ENDIF()
-
-	INCLUDE_DIRECTORIES(${PYTHON_INCLUDE_DIRS})
+	
+	INCLUDE_DIRECTORIES(${Python_INCLUDE_DIRS})
 	INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR})
+	link_directories(${Python_LIBRARY_DIRS})
 	
 	SET(CMAKE_SWIG_FLAGS ${SWIG_DEFINES})
 	SET_SOURCE_FILES_PROPERTIES(wrap/wrapper.i PROPERTIES CPLUSPLUS ON)
@@ -337,40 +332,26 @@ if (ENABLE_PYTHON_WRAPPER)
 		# On osx there is some state in the python dylib. With `-Wl,undefined,suppress` we can ignore the missing symbols at compile time.
 		SWIG_LINK_LIBRARIES(voxec libvoxec)
 	else()
-		SWIG_LINK_LIBRARIES(voxec libvoxec ${PYTHON_LIBRARIES})
+		SWIG_LINK_LIBRARIES(voxec libvoxec ${Python_LIBRARIES})
 	endif()
 
-	EXECUTE_PROCESS(
-		COMMAND ${PYTHON_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
-		OUTPUT_VARIABLE PYTHON_EXTENSION_SUFFIX
-		OUTPUT_STRIP_TRAILING_WHITESPACE
-	)
-	MESSAGE(STATUS "${PYTHON_EXTENSION_SUFFIX}")
-	SET_TARGET_PROPERTIES(${SWIG_MODULE_voxec_REAL_NAME} PROPERTIES SUFFIX ${PYTHON_EXTENSION_SUFFIX})
-
-	EXECUTE_PROCESS(
-		COMMAND ${PYTHON_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_path('platlib'))"
-		OUTPUT_VARIABLE PYTHON_PLATLIB
-		OUTPUT_STRIP_TRAILING_WHITESPACE
-	)
-
-	INSTALL(FILES "${CMAKE_BINARY_DIR}/voxec.py" "${CMAKE_CURRENT_SOURCE_DIR}/module/__init__.py"
-			DESTINATION "${PYTHON_PLATLIB}/voxec/")
-	INSTALL(TARGETS ${SWIG_MODULE_voxec_REAL_NAME}
-			DESTINATION "${PYTHON_PLATLIB}/voxec/")
+    INSTALL(FILES "${CMAKE_BINARY_DIR}/voxec.py" "${CMAKE_CURRENT_SOURCE_DIR}/module/__init__.py"
+            DESTINATION "${Python_SITEARCH}/voxec/")
+    INSTALL(TARGETS ${SWIG_MODULE_voxec_REAL_NAME}
+            DESTINATION "${Python_SITEARCH}/voxec/")
 endif()
 
 if (ENABLE_TESTS)
 file(GLOB test_filenames tests/*.cpp)
 foreach(filename ${test_filenames})
-	get_filename_component(test_name ${filename} NAME_WE)
-	add_executable("${test_name}" ${filename})
-	SET(libvoxec_IF_USED "")
-	if ("${test_name}" MATCHES "parser")
-	SET(libvoxec_IF_USED libvoxec)
-	endif()
-	target_link_libraries("${test_name}" gtest_main libvoxel ${libvoxec_IF_USED} ${IFC_LIBRARIES} ${ICU_LIBRARIES} ${Boost_LIBRARIES} ${OCC_LIBRARIES} ${LIB_RT} ${dl} ${CMAKE_THREAD_LIBS_INIT})
-	add_test(NAME "${test_name}" COMMAND "${test_name}")
+    get_filename_component(test_name ${filename} NAME_WE)
+    add_executable("${test_name}" ${filename})
+    SET(libvoxec_IF_USED "")
+    if ("${test_name}" MATCHES "parser")
+    SET(libvoxec_IF_USED libvoxec)
+    endif()
+    target_link_libraries("${test_name}" gtest_main libvoxel ${libvoxec_IF_USED} ${IFC_LIBRARIES} ${ICU_LIBRARIES} ${Boost_LIBRARIES} ${OCC_LIBRARIES} ${LIB_RT} ${dl} ${CMAKE_THREAD_LIBS_INIT})
+    add_test(NAME "${test_name}" COMMAND "${test_name}")
 endforeach()
 endif()
 
@@ -382,8 +363,8 @@ target_link_libraries(voxec_exe libvoxec)
 set_property(TARGET voxec_exe PROPERTY OUTPUT_NAME voxec)
 
 install(TARGETS voxec_exe libvoxel libvoxec
-	RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
-	LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
-	ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+    RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
+    LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
 
 install(FILES ${LIBVOXELIZER_HEADER_FILES} ${LIBVOXEC_HEADER_FILES} DESTINATION ${CMAKE_INSTALL_PREFIX}/include/voxel)
