@@ -112,7 +112,7 @@ jobs:
 
       - name: Package .zip archives
         run: |
-          base=$GITHUB_WORKSPACE/IfcOpenShell/build/Darwin/${{ matrix.cpuarch }}/10.9/install
+          base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
           mkdir -p $GITHUB_WORKSPACE/package
           cd $GITHUB_WORKSPACE/package
 
@@ -123,7 +123,6 @@ jobs:
 
           PATH=$base/python-3.9.11/bin:$PATH python3 -m pip install --upgrade pip setuptools wheel
           PATH=$base/python-3.9.11/bin:$PATH python3 -m pip install build delocate
-          PATH=$base/python-3.9.11/bin:$PATH patchelf --version
           PATH=$base/python-3.9.11/bin:$PATH python3 -m build -w
           PATH=$base/python-3.9.11/bin:$PATH python3 -m delocate-wheel dist/*.whl -w audited
 
