@@ -72,9 +72,7 @@ jobs:
 
       - name: Compile voxec
         run: |
-          base=$GITHUB_WORKSPACE/IfcOpenShell/build/Darwin/${{ matrix.cpuarch }}/10.9/install
-          find $base
-          ls -al $base/python-3.9.11/bin/python3
+          base=$(find ./IfcOpenShell/build -maxdepth 4 -name install)
           mkdir build
           cd build
           cmake .. \
@@ -90,6 +88,8 @@ jobs:
             "-DOCC_INCLUDE_DIR=$base/occt-7.8.1/include/opencascade" \
             "-DOCC_LIBRARY_DIR=$base/occt-7.8.1/lib" \
             "-DPYTHON_EXECUTABLE=$base/python-3.9.11/bin/python3" \
+            "-DPYTHON_INCLUDE_DIR=$base/python-3.9.11/include/python3.9" \
+            "-DPYTHON_LIBRARY=$base/python-3.9.11/lib/libpython3.9.dylib" \
             "-DBOOST_ROOT=$base/boost-1.86.0" \
             "-DGMP_LIBRARY_DIR=$base/gmp-6.2.1/lib" \
             "-DMPFR_LIBRARY_DIR=$base/mpfr-3.1.6/lib"
@@ -97,7 +97,7 @@ jobs:
 
       - name: Package .zip archives
         run: |
-          base=$GITHUB_WORKSPACE/IfcOpenShell/build/Darwin/${{ matrix.cpuarch }}/10.9/install
+          base=$(find ./IfcOpenShell/build -maxdepth 4 -name install)
           mkdir -p $GITHUB_WORKSPACE/package
           cd $GITHUB_WORKSPACE/package
 
