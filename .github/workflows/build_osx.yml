@@ -124,7 +124,7 @@ jobs:
           PATH=$base/python-3.9.11/bin:$PATH python3 -m pip install --upgrade pip setuptools wheel
           PATH=$base/python-3.9.11/bin:$PATH python3 -m pip install build delocate
           PATH=$base/python-3.9.11/bin:$PATH python3 -m build -w
-          PATH=$base/python-3.9.11/bin:$PATH python3 -m delocate-wheel dist/*.whl -w audited
+          PATH=$base/python-3.9.11/bin:$PATH delocate-wheel dist/*.whl -w audited
 
       - name: Publish a Python distribution to PyPI
         uses: ortega2247/pypi-upload-action@master
