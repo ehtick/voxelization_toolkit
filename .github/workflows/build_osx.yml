@@ -18,11 +18,13 @@ jobs:
             arch: x64
             oldarch:
             cpuarch: x86_64
+            macosx_ver: '10_15'
           - os: macos
             runner: macos-14
             arch: arm64
             oldarch: m1
             cpuarch: arm64
+            macosx_ver: '11_0'
 
     steps:
       - name: Checkout Repository
@@ -89,6 +91,9 @@ jobs:
 
       - name: Compile voxec
         run: |
+          export CFLAGS="-Wl,-flat_namespace,-undefined,suppress"
+          export CXXFLAGS="-Wl,-flat_namespace,-undefined,suppress"
+          export LDFLAGS="-Wl,-flat_namespace,-undefined,suppress"
           base=$(find $PWD/IfcOpenShell/build -maxdepth 4 -name install)
           mkdir build
           cd build
@@ -125,6 +130,7 @@ jobs:
           PATH=$base/python-3.9.11/bin:$PATH python3 -m pip install build delocate
           PATH=$base/python-3.9.11/bin:$PATH python3 -m build -w
           PATH=$base/python-3.9.11/bin:$PATH delocate-wheel dist/*.whl -w audited
+          mv audited/voxec-0.4.0-cp39-none-any.whl audited/voxec-0.4.0-cp39-none-macosx_${{ matrix.macosx_ver }}_x86_64.whl
 
       - name: Publish a Python distribution to PyPI
         uses: ortega2247/pypi-upload-action@master
